@@ -18,6 +18,7 @@ import re
 from dotenv import load_dotenv
 from groq import Groq
 
+from guardrails import SYSTEM_MESSAGE, sanitize_text, check_output
 from utils.data_loader import load_listings
 
 load_dotenv()
@@ -112,17 +113,17 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     client = _get_groq_client()
 
     item_context = (
-        f"Item: {new_item['title']}\n"
-        f"Description: {new_item['description']}\n"
-        f"Style tags: {', '.join(new_item.get('style_tags', []))}\n"
-        f"Colors: {', '.join(new_item.get('colors', []))}"
+        f"Item: {sanitize_text(new_item['title'])}\n"
+        f"Description: {sanitize_text(new_item['description'])}\n"
+        f"Style tags: {', '.join(sanitize_text(t) for t in new_item.get('style_tags', []))}\n"
+        f"Colors: {', '.join(sanitize_text(c) for c in new_item.get('colors', []))}"
     )
 
     items = wardrobe.get("items", [])
 
     if not items:
         prompt = (
-            "You are a fashion stylist. A user is considering buying this thrifted item:\n\n"
+            "A user is considering buying this thrifted item:\n\n"
             f"{item_context}\n\n"
             "They haven't shared their wardrobe yet. Suggest 1-2 complete outfit ideas — "
             "what kinds of pieces pair well with this item, what aesthetic it suits, and "
@@ -130,14 +131,15 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
         )
     else:
         wardrobe_lines = [
-            f"- {w['name']} (colors: {', '.join(w.get('colors', []))}, "
-            f"tags: {', '.join(w.get('style_tags', []))})"
+            f"- {sanitize_text(w['name'])} "
+            f"(colors: {', '.join(sanitize_text(c) for c in w.get('colors', []))}, "
+            f"tags: {', '.join(sanitize_text(t) for t in w.get('style_tags', []))})"
             for w in items
         ]
         wardrobe_text = "\n".join(wardrobe_lines)
 
         prompt = (
-            "You are a fashion stylist. A user is considering buying this thrifted item:\n\n"
+            "A user is considering buying this thrifted item:\n\n"
             f"{item_context}\n\n"
             "Their current wardrobe includes:\n"
             f"{wardrobe_text}\n\n"
@@ -148,10 +150,14 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[SYSTEM_MESSAGE, {"role": "user", "content": prompt}],
         temperature=0.7,
     )
-    return response.choices[0].message.content
+    result = response.choices[0].message.content or ""
+    blocked = check_output(result, context="suggest_outfit")
+    if blocked:
+        return blocked
+    return result
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -180,20 +186,28 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     client = _get_groq_client()
 
+    safe_outfit = sanitize_text(outfit, max_length=1200)
+    safe_title = sanitize_text(new_item["title"])
+    safe_platform = sanitize_text(new_item["platform"])
+
     prompt = (
-        "You are writing an Instagram/TikTok OOTD caption for a thrifted find. "
-        "Write a 2-4 sentence caption that:\n"
-        "- Feels casual and authentic, like a real post (not a product listing)\n"
-        f"- Mentions the item name \"{new_item['title']}\" naturally\n"
-        f"- Mentions the price (${new_item['price']:.2f}) and platform ({new_item['platform']}) once each\n"
-        "- Captures the outfit vibe in specific terms based on this outfit suggestion:\n\n"
-        f"{outfit}\n\n"
+        "Write a 2-4 sentence Instagram/TikTok OOTD caption for a thrifted find. "
+        "The caption must:\n"
+        "- Feel casual and authentic, like a real post (not a product listing)\n"
+        f"- Mention the item name \"{safe_title}\" naturally\n"
+        f"- Mention the price (${new_item['price']:.2f}) and platform ({safe_platform}) once each\n"
+        "- Capture the outfit vibe based ONLY on this outfit suggestion:\n\n"
+        f"{safe_outfit}\n\n"
         "Write only the caption. No hashtags. No quotes around it."
     )
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[SYSTEM_MESSAGE, {"role": "user", "content": prompt}],
         temperature=0.9,
     )
-    return response.choices[0].message.content
+    result = response.choices[0].message.content or ""
+    blocked = check_output(result, context="create_fit_card")
+    if blocked:
+        return blocked
+    return result

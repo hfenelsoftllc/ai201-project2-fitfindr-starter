@@ -15,6 +15,7 @@ but check your terminal — the port may differ).
 import gradio as gr
 
 from agent import run_agent
+from guardrails import check_input
 from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
 
 
@@ -33,8 +34,9 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
             (listing_text, outfit_suggestion, fit_card)
         Each string maps to one of the three output panels in the UI.
     """
-    if not user_query or not user_query.strip():
-        return "Please enter a search query to get started.", "", ""
+    guard_error = check_input(user_query)
+    if guard_error:
+        return guard_error, "", ""
 
     wardrobe = (
         get_example_wardrobe()
